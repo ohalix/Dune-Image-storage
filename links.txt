@@ -3,3 +3,6 @@ https://api.imf.org/external/sdmx/2.1/data/IMF.STA,CPI/USA.CPI.CP01.IX.M?lastNOb
 https://api.imf.org/external/sdmx/2.1/data/IMF.RES,WEO/USA+G001.LUR+NGDP_RPCH+PCPIEPCH.A?lastNObservations=13&detail=dataonly
 
 LUR, NGDP_RPCH, PCPIEPCH
+
+
+https://claude.ai/share/279e40cd-b215-44ec-af96-f8de22f78ce2
