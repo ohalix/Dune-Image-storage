@@ -5,4 +5,4 @@ https://api.imf.org/external/sdmx/2.1/data/IMF.RES,WEO/USA+G001.LUR+NGDP_RPCH+PC
 LUR, NGDP_RPCH, PCPIEPCH
 
 
-https://claude.ai/share/279e40cd-b215-44ec-af96-f8de22f78ce2
+https://claude.ai/share/5b51d18d-eea7-4112-b24c-9b5bac2aaebc
