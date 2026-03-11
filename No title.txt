@@ -1,0 +1,203 @@
+Api sources
+coingecko:
+1. https://pro-api.coingecko.com/api/v3/global
+
+Response fields we store:
+- total_market_cap_usd
+- total_volume_usd
+- market_cap_percentage.btc (btc_dominance_pct)
+- market_cap_percentage.eth (eth_dominance_pct)
+- market_cap_percentage.usdt (usdt_dominance_pct) 
+- market_cap_percentage.sol (sol_dominance_pct)
+- market_cap_change_percentage_24h_usd
+Cadence: Every 30 minutes 
+
+
+2. https://pro-api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana,binancecoin,arbitrum,optimism,matic-network,avalanche-2,aptos,starknet,hyperliquid,the-open-network,ripple,cardano,chainlink,mantle&vs_currencies=usd&include_market_cap=true&include_24hr_vol=true&include_24hr_change=true&include_last_updated_at=true
+
+Response fields we store per asset:
+- price_usd
+- market_cap
+- volume_24h
+- change_24h_pct
+- price_updated_at
+
+
+
+3. https://pro-api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=7
+
+https://pro-api.coingecko.com/api/v3/coins/ethereum/market_chart?vs_currency=usd&days=7
+
+What we derive and store:
+- Extract the 7 daily closes from the hourly series (one per calendar day at 00:00 UTC)
+- Store chart as a JSON array: [{date, close}, ...]
+- Derive: week_high, week_low, week_open
+- Derive: current_position_in_week_range = (current_price - week_low) / (week_high - week_low) → 0.0 to 1.0 (0 = at week low, 1 = at week high)
+- Derive: week_trend_direction = "up" / "flat" / "down" based on first vs. last day close
+Cadence: Twice per day at the scheduled pipeline run.Schedule the daily historical fetch for 00:15 UTC and at every ingestion run to get half-day data.
+
+
+coinbase:
+https://api.coinbase.com/v2/prices/{currency_pair}/spot
+
+Our usage: Cross-validation of CoinGecko prices for BTC, ETH, SOL, and other supported pairs. Coinbase's spot price reflects their exchange specifically — it is not volume-weighted across all markets, but it represents a highly liquid US-regulated exchange price.
+Supported pairs (relevant to us):
+BTC-USD, ETH-USD, SOL-USD, BNB-USD, XRP-USD, ADA-USD, AVAX-USD, 
+MATIC-USD, OP-USD, LINK-USD, DOT-USD
+
+
+binance:
+1. https://api.binance.com/api/v3/avgPrice
+
+Our usage: A third price source for the averaging mechanism. Binance's 5-min VWAP is arguably the most accurate available price for assets with high Binance volume (BTC, ETH, SOL, BNB, and most altcoins).
+Pairs we'll call:
+BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, AVAXUSDT,
+MATICUSDT, ARBUSDT, OPUSDT, APTUSDT, STRKUSDT, TONUSDT, LINKUSDT,
+MNTUSDT, SCRUSDT, HYPEUSDT
+
+2. https://api.binance.com/api/v3/ticker/24hr
+
+Our usage: The 24h ticker is more information-rich than avgPrice. The fields we need:
+- priceChangePercent → change_24h_pct
+- 24h_high, 24h_low 
+- volume (base asset volume) + quoteVolume 
+- weightedAvgPrice
+Multi-symbol call (single request for all assets):
+GET /api/v3/ticker/24hr?symbols=["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT",...]
+
+3. https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=14
+
+coinalyze:
+1. https://api.coinalyze.net/v1/open-interest?api_key=888d13e2-a7c9-4837-83db-1c6db919ce14&symbols=BTCUSDT_PERP.A&convert_to_usd=true
+
+What we store: Aggregate OI across major exchanges for BTC and ETH perpetuals. Sum all exchange OI values for the same base asset → total_oi_usd.
+
+2. https://api.coinalyze.net/v1/funding-rate
+
+What we store: Current funding rate for BTC and ETH perps on Binance (most liquid), Bybit, and OKX. The simple average of these three is the market consensus funding rate.
+Interpretation for the regime deriver:
+Funding > +0.05% (per 8h) → extremely crowded longs, high liquidation cascade risk
+Funding +0.01% to +0.05% → longs slightly dominant, normal bull market
+Funding -0.01% to +0.01% → neutral positioning
+Funding < -0.01% → shorts crowded, potential short squeeze setup
+Funding < -0.03% → extreme short crowding, very unusual
+
+3. https://api.coinalyze.net/v1/open-interest-history?symbols=BTCUSDT_PERP.A&interval=daily&from={7_days_ago_unix}&to={now_unix}&convert_to_usd=true
+
+
+Our usage: Daily OI history for BTC over 7 days.
+This gives us the 7-day OI trend: is leverage building or collapsing over the week? This is a critical contextual signal.. a 20% OI expansion over 7 days heading into a news event means the market is very leveraged and susceptible to a flush.
+
+4. https://api.coinalyze.net/v1/funding-rate-history
+
+Funding Rate History
+Same pattern as OI history. 7-day daily funding rate history for BTC/ETH perps. We derive: average funding rate over 7 days, direction trend (increasing/decreasing/stable).
+
+5. https://api.coinalyze.net/v1/liquidation-history
+
+Liquidation Data
+Parameters: symbols, interval, from, to
+Schema:
+{
+  "symbol": "BTCUSDT_PERP.A",
+  "history": [
+    {"t": 1700000000, "l": 45000000.0, "s": 2000000.0}
+  ]
+}
+Where l = longs liquidated (USD), s = shorts liquidated (USD) in that interval.
+
+What we store: 
+- 24h long liquidation total
+- 24h short liquidation total
+- 24h net liquidation direction (longs_dominated / shorts_dominated / balanced)
+
+6. https://api.coinalyze.net/v1/long-short-ratio-history 
+
+Long/Short Positioning
+Schema per interval: {t, r (ratio), l (longs %), s (shorts %)}
+
+What we store: 
+- Current long percentage
+- current short percentage
+- 7-day trend of long/short ratio. 
+When longs > 70%, market is crowded long. When shorts > 55%, the squeeze setup is live.
+
+7. https://api.coinalyze.net/v1/ohlcv-history
+
+Perp Price + Volume
+This is the OHLCV for perpetual futures specifically (not spot). The fields include v (volume), bv (buy volume), Sell volume = v-bv, and btx (buy trades). The buy/sell volume ratio tells you if there's a systematic market-buy or market-sell flow.. this is the "tape reading" signal. A rising price with sell volume dominant is a trap.
+
+
+defillama:
+1. https://api.llama.fi/v2/chains — TVL by Chain
+What it gives us: Current TVL for all chains with gecko_id, tvl, tokenSymbol, name.
+Our call: Single call, no parameters.
+What we extract (filtered to our tracked chains):
+Ethereum TVL
+Arbitrum TVL
+Base TVL
+Optimism TVL
+Solana TVL
+BNB Chain TVL
+Avalanche TVL
+Polygon TVL
+Starknet TVL
+What we store: A JSON dict of {chain_name: tvl_usd} in the market_snapshots extra_json, plus aggregate total DeFi TVL.
+
+2. https://api.llama.fi/v2/historicalChainTvl/{chain} — Historical Chain TVL
+What it gives us: Array of {date, tvl} for a specific chain. Goes back to the chain's genesis.
+Our usage: For each tracked chain, call this endpoint and extract the last 7 daily data points. Derive: TVL 24h change %, TVL 7d change %, TVL trend direction.
+
+The right API call pattern: Rather than calling this for all 9 chains each cycle, call it once daily (not every 30 minutes — TVL doesn't change meaningfully every 30 minutes). Schedule as a bi-daily companion to the OHLCV fetch.
+
+3. https://stablecoins.llama.fi/stablecoins
+
+Stablecoin Market Data
+What it gives us: All stablecoins with name, symbol, circulating (by peg type), price, chains, chainCirculating.
+Our usage: Extract USDT, USDC, DAI, USDE (Ethena), FRAX circulating supply. Sum total stablecoin circulating supply. Calculate stablecoin market dominance (stablecoin_total / total_crypto_mcap from CoinGecko global). Store 7-day trend.
+
+4. https://stablecoins.llama.fi/stablecoinprices
+
+Historical Stablecoin Prices
+What it gives us: Historical price data for all stablecoins. Critical for depeg detection.
+Our usage: Fetch daily. If USDT, USDC, or DAI price deviates > 0.3% from $1.00 in the latest data, set a stablecoin_depeg_alert: true flag in the market snapshot. This flag gets propagated directly into the AI prompt as a high-severity marker regardless of whether any news signal mentioned it.
+
+5. https://api.llama.fi/overview/dexs?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true
+
+DEX Volume Overview
+What it gives us: Total DEX volume 24h, 7d change, protocol breakdown with individual volumes.
+Our usage: Total DEX 24h volume, DEX volume 7d trend (rising/falling/flat), and the on-chain/off-chain activity ratio (compare DEX volume to total crypto 24h trading volume from CoinGecko).
+
+6. https://api.llama.fi/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true
+
+Protocol Fees
+What it gives us: Total fees generated by all DeFi protocols in the last 24h. Protocol-level breakdown.
+Our usage: Total DeFi fees 24h is a "DeFi productivity" metric — how much real value is being generated on-chain. Top 5 fee-generating protocols tell you what people are actually using (not just holding TVL in).
+
+IMF: 
+1. https://api.imf.org/external/sdmx/2.1/data/IMF.STA,CPI/USA.CPI._T.SRP_YOY_PCH_PA_PT.M?startPeriod=2023-01&endPeriod=2026-03&lastNObservations=13&detail=dataonly
+
+Consumer Price Index
+Key series we need:
+- US CPI, All Items (monthly, index)
+
+What we store: Latest monthly CPI value, YoY change %, 3-month trend direction (accelerating/stable/decelerating).
+
+2. 
+https://api.imf.org/external/sdmx/2.1/data/IMF.RES,WEO/USA+G001.LUR+NGDP_RPCH+PCPIEPCH.A?startperiod=2021&endPeriod=2027&lastNObservations=7&detail=dataonly
+
+WEO — World Economic Outlook
+What it is: Published twice yearly (April and October). Contains GDP growth forecasts, inflation projections, unemployment, and debt ratios for all IMF member countries and aggregates.
+
+Key series:
+US.NGDP_RPCH — US Real GDP Growth (annual % change)
+
+US.PCPIEPCH — US End-period CPI inflation
+
+G001.NGDP_RPCH — World Real GDP Growth (the most important global context)
+
+US.LUR — US Unemployment Rate
+
+What we store: The most recent WEO publication's projections for current and next year. This does not change between publications, so we store it once and only update when a new WEO is published (April/October).
+
+Note: Accurate data is passed via XML, we would be building a different parsing structure for tge IMF data alone.
